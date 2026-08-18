@@ -65,22 +65,28 @@ class VolcengineOpenVikingMemory(Star):
         self._sessions_ready: set[str] = set()
         self._sessions_lock = asyncio.Lock()
         self._key_warned = False
-        # tool_access=off -> remove the LLM tools so the model never sees them.
+        # Access=off -> remove the LLM tools so the model never sees them.
         # Runs at instance init so it also applies on hot plugin reload (the
         # on_astrbot_loaded hook only fires once at full startup).
-        if self.cfg.tool_access == "off":
-            self._hide_tools()
+        self._hide_tools()
         if not self.cfg.ov_api_key:
             logger.warning(
                 "[OV] 未配置 OpenViking API Key（请在插件配置页填写 ov_api_key）"
             )
 
     def _hide_tools(self) -> None:
+        hidden: list[str] = []
+        if self.cfg.tool_access == "off":
+            hidden += ["ov_memory_search", "ov_memory_remember"]
+        if self.cfg.delete_access == "off":
+            hidden.append("ov_memory_delete")
+        if not hidden:
+            return
         try:
             mgr = self.context.get_llm_tool_manager()
-            for name in ("ov_memory_search", "ov_memory_remember"):
+            for name in hidden:
                 mgr.remove_func(name)
-            logger.info("[OV] tool_access=off，已隐藏 ov_memory_search/ov_memory_remember")
+            logger.info("[OV] 已隐藏工具: %s", ", ".join(hidden))
         except Exception as exc:
             logger.warning("[OV] 隐藏工具失败：%s", exc)
 
@@ -155,9 +161,8 @@ class VolcengineOpenVikingMemory(Star):
 
     @filter.on_astrbot_loaded()
     async def on_loaded(self):
-        if self.cfg.tool_access == "off":
-            # Belt-and-suspenders: also hide on full startup after all plugins load.
-            self._hide_tools()
+        # Belt-and-suspenders: also hide on full startup after all plugins load.
+        self._hide_tools()
         if not self._ready():
             return
         healthy = await self.ov.health()
@@ -259,7 +264,7 @@ class VolcengineOpenVikingMemory(Star):
 
     @filter.on_using_llm_tool()
     async def on_tool_call(self, event: AstrMessageEvent, *args, **kwargs):
-        if not self.cfg.capture_tool_io or not self._ready():
+        if not self._access_allowed(event, self.cfg.tool_io_access) or not self._ready():
             return
         tool = kwargs.get("tool", args[0] if args else None)
         tool_args = kwargs.get("tool_args", args[1] if len(args) > 1 else None)
@@ -276,7 +281,7 @@ class VolcengineOpenVikingMemory(Star):
 
     @filter.on_llm_tool_respond()
     async def on_tool_respond(self, event: AstrMessageEvent, *args, **kwargs):
-        if not self.cfg.capture_tool_io or not self._ready():
+        if not self._access_allowed(event, self.cfg.tool_io_access) or not self._ready():
             return
         tool = kwargs.get("tool", args[0] if args else None)
         tool_result = kwargs.get("tool_result", args[2] if len(args) > 2 else None)
@@ -375,6 +380,39 @@ class VolcengineOpenVikingMemory(Star):
             await self.scheduler.commit(agent_id, session_id)
         return json.dumps({"ok": ok, "agent": agent_id}, ensure_ascii=False)
 
+    @filter.llm_tool(name="ov_memory_delete")
+    async def ov_memory_delete(
+        self,
+        event: AstrMessageEvent,
+        uri: str,
+    ):
+        """按 viking:// URI 删除一条长期记忆；有副作用（删除记忆，不可恢复）。
+
+        契约：U ::= viking://user/default/memories/... 形式的完整 URI；
+        delete(U) -> {ok, uri}。多条请多次调用。
+        优先用 ov_memory_search 拿到精确 URI 再删；不要用模糊词删除；
+        删除影响后续所有会话的召回，谨慎使用。
+
+        Args:
+            uri(string): U；要删除的记忆文件 URI。
+        """
+        if not self._ready():
+            return json.dumps({"error": "OpenViking API Key 未配置"}, ensure_ascii=False)
+        if self.cfg.delete_access == "off":
+            return json.dumps({"error": "删除功能已禁用"}, ensure_ascii=False)
+        if not self._access_allowed(event, self.cfg.delete_access):
+            return json.dumps({"error": "删除仅管理员可用"}, ensure_ascii=False)
+        text_uri = str(uri or "").strip()
+        if not text_uri.startswith("viking://"):
+            return json.dumps({"error": "非法 URI，需 viking:// 开头"}, ensure_ascii=False)
+        info = self._event_info(event)
+        agent_id = derive_agent_id(self.cfg, info["platform"], info["group_id"], info["sender_id"])
+        try:
+            await self.ov.delete_uri(text_uri, agent_id=agent_id)
+            return json.dumps({"ok": True, "uri": text_uri}, ensure_ascii=False)
+        except OVError as exc:
+            return json.dumps({"error": f"删除失败：{exc}"}, ensure_ascii=False)
+
     # ---------------------------------------------------------------- commands
 
     @filter.command("记忆")
@@ -392,10 +430,14 @@ class VolcengineOpenVikingMemory(Star):
                 output = await self._cmd_status(event)
             elif text.startswith("搜索 "):
                 output = await self._cmd_search(event, text[3:].strip())
+            elif text.startswith("删除 "):
+                output = await self._cmd_delete(event, text[3:].strip())
+            elif text in ("清空", "清空 确认"):
+                output = await self._cmd_clear(event, text)
             elif text in ("提交", "commit"):
                 output = await self._cmd_commit(event)
             else:
-                output = "用法：/记忆 状态｜搜索 <词>｜提交"
+                output = "用法：/记忆 状态｜搜索 <词>｜删除 <uri>｜清空 [确认]｜提交"
         except Exception as exc:
             output = f"记忆操作失败：{exc}"
         yield event.plain_result(output)
@@ -416,7 +458,8 @@ class VolcengineOpenVikingMemory(Star):
             f"会话：{session_id}",
             f"召回模式：{self.cfg.recall_mode}（接口 {self.cfg.recall_api}）",
             f"权限：捕获={self.cfg.capture_access} 召回={self.cfg.recall_access} "
-            f"工具={self.cfg.tool_access} 命令={self.cfg.command_access}",
+            f"工具={self.cfg.tool_access} 删除={self.cfg.delete_access} "
+            f"命令={self.cfg.command_access} 工具记录={self.cfg.tool_io_access}",
             f"待提交：{sched['pending_messages']} 条 / ~{sched['pending_tokens']} tokens",
             f"上次提交：{_fmt_ts(sched['last_commit_ts'])}",
         ]
@@ -443,3 +486,39 @@ class VolcengineOpenVikingMemory(Star):
         agent_id = derive_agent_id(self.cfg, info["platform"], info["group_id"], info["sender_id"])
         ok = await self.scheduler.commit(agent_id, derive_session_id(agent_id))
         return "已提交会话，触发记忆提取。" if ok else "没有待提交内容，或提交失败（见日志）。"
+
+    async def _cmd_delete(self, event: AstrMessageEvent, uri: str) -> str:
+        """删除单条记忆（按 viking:// URI）。"""
+        if self.cfg.delete_access == "off":
+            return "删除功能已禁用。"
+        if not self._access_allowed(event, self.cfg.delete_access):
+            return "无权限：删除仅管理员可用。"
+        if not str(uri or "").strip().startswith("viking://"):
+            return "请输入 viking:// 开头的记忆 URI（可用 /记忆 搜索 获取）。"
+        info = self._event_info(event)
+        agent_id = derive_agent_id(self.cfg, info["platform"], info["group_id"], info["sender_id"])
+        try:
+            await self.ov.delete_uri(str(uri).strip(), agent_id=agent_id)
+            return f"已删除：{uri}"
+        except OVError as exc:
+            return f"删除失败：{exc}"
+
+    async def _cmd_clear(self, event: AstrMessageEvent, text: str) -> str:
+        """清空全部记忆（危险操作：管理员 + 二次确认）。"""
+        if self.cfg.delete_access == "off":
+            return "删除功能已禁用。"
+        if not self._access_allowed(event, self.cfg.delete_access):
+            return "无权限：删除仅管理员可用。"
+        if not self._is_admin(event):
+            return "清空全部记忆仅管理员可用。"
+        if text != "清空 确认":
+            return "此操作将删除全部记忆且不可恢复。确认请输入：/记忆 清空 确认"
+        info = self._event_info(event)
+        agent_id = derive_agent_id(self.cfg, info["platform"], info["group_id"], info["sender_id"])
+        try:
+            await self.ov.delete_uri(
+                "viking://user/default/memories", agent_id=agent_id, recursive=True
+            )
+            return "已清空全部记忆。"
+        except OVError as exc:
+            return f"清空失败：{exc}"

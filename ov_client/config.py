@@ -136,6 +136,21 @@ class PluginConfig:
         return _enum(self.raw.get("command_access"), ACCESS_MODES, "free")
 
     @property
+    def delete_access(self) -> str:
+        """删除记忆权限（工具+命令）；off 时不注册删除工具且命令返回已禁用。"""
+        return _enum(self.raw.get("delete_access"), ACCESS_MODES, "admin")
+
+    @property
+    def tool_io_access(self) -> str:
+        """工具调用记录权限；back-compat：capture_tool_io=false 等价于 off。"""
+        mode = self.raw.get("tool_io_access")
+        if mode is None:
+            if self.raw.get("capture_tool_io") is False:
+                return "off"
+            return "free"
+        return _enum(mode, ACCESS_MODES, "free")
+
+    @property
     def request_timeout_seconds(self) -> int:
         return _bounded_int(self.raw.get("request_timeout_seconds"), 60, 10, 300)
 

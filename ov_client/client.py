@@ -156,6 +156,26 @@ class OVClient:
         )
         return self._unwrap(body)
 
+    async def delete_uri(self, uri: str, agent_id: str = "", recursive: bool = True) -> dict[str, Any]:
+        """Delete a viking:// file or directory (idempotent)."""
+        import urllib.parse as _parse
+
+        path = f"/api/v1/fs?uri={_parse.quote(uri, safe='/:@')}&recursive={str(recursive).lower()}"
+        url = f"{self.base_url}{path}"
+        try:
+            resp = await self._http.request(
+                "DELETE", url, headers=self._headers(agent_id)
+            )
+        except httpx.HTTPError as exc:
+            raise OVError(f"网络错误 {url}: {exc}") from exc
+        self._log("DELETE", url, resp.status_code, resp.text[:300])
+        if resp.status_code != 200:
+            raise OVError(f"HTTP {resp.status_code}: {resp.text[:300]}")
+        try:
+            return resp.json()
+        except json.JSONDecodeError as exc:
+            raise OVError("响应不是 JSON") from exc
+
     # -- search ---------------------------------------------------------------
 
     async def find(

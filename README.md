@@ -52,6 +52,8 @@ LLM 请求前 ──► on_llm_request ──► 按当前消息 search/find ─
 | `capture_access` | `free` | 对话捕获权限（三值） |
 | `recall_access` | `free` | 自动召回注入权限（三值） |
 | `tool_access` | `free` | LLM 工具权限（三值） |
+| `delete_access` | `admin` | 删除记忆权限（三值，默认仅管理员） |
+| `tool_io_access` | `free` | 工具调用记录权限（三值） |
 | `command_access` | `free` | 管理命令权限（三值） |
 | `recall_mode` | `auto` | 召回方式：`auto` 自动注入 / `tool` 仅工具 / `both` 双模式 / `off` 关闭 |
 | `recall_api` | `find` | 召回接口：`find`（列表，兼容最好）/ `context`（服务端组装，不支持时自动回退） |
@@ -68,30 +70,35 @@ LLM 请求前 ──► on_llm_request ──► 按当前消息 search/find ─
 
 ## 权限控制（三值开关）
 
-捕获、自动召回、模型工具、管理命令四个功能各自有独立的三值开关：
+捕获、自动召回、模型工具、删除记忆、工具调用记录、管理命令六个功能各自有独立的三值开关：
 
 | 取值 | 含义 |
 |------|------|
 | `free` | 所有用户/对话可用（默认） |
 | `admin` | 仅管理员对话可用；普通用户触发时返回"仅管理员可用" |
-| `off` | 禁用；**模型工具直接不注册**，模型看不到 `ov_memory_search` / `ov_memory_remember` |
+| `off` | 禁用；**模型工具直接不注册**，模型看不到对应工具 |
 
 管理员判定：优先平台上报的角色（`event.is_admin()`，群主/群管理），兜底比对 AstrBot 配置的 `admins_id` 列表。
 
 典型用法：
 - `capture_access=admin` + `recall_access=admin`：记忆只服务机器人管理员，普通群友的闲聊不会污染记忆库
-- `tool_access=off`：完全不给模型提供记忆工具（仅保留自动注入）
+- `tool_access=off`：完全不给模型提供记忆搜索/写入工具（仅保留自动注入）
+- `delete_access=off`：彻底关闭删除能力（工具隐藏 + 命令禁用）
+- `delete_access=admin`（默认）：删除记忆仅管理员可用；`/记忆 清空` 始终要求管理员并二次确认
 - `command_access=admin`：`/记忆` 命令只有管理员能操作
 
 ## 指令与工具
 
 | 触发 | 说明 |
 |------|------|
-| `/记忆 状态` | 查看服务连通、隔离粒度、待提交量与上次提交时间 |
+| `/记忆 状态` | 查看服务连通、隔离粒度、权限配置、待提交量与上次提交时间 |
 | `/记忆 搜索 <词>` | 手动语义搜索记忆 |
+| `/记忆 删除 <uri>` | 按 viking:// URI 删除单条记忆（受 `delete_access` 控制）|
+| `/记忆 清空 [确认]` | 清空全部记忆（管理员 + 二次确认）|
 | `/记忆 提交` | 手动触发当前会话提交与记忆提取 |
 | `ov_memory_search(query, limit)` | LLM 工具：语义检索长期记忆（只读） |
 | `ov_memory_remember(content)` | LLM 工具：把重要事实显式写入并立即提交（有副作用） |
+| `ov_memory_delete(uris)` | LLM 工具：按 URI 列表删除记忆（有副作用，受 `delete_access` 控制）|
 
 ## 开发
 

@@ -100,14 +100,24 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg.recall_access, "free")
         self.assertEqual(cfg.tool_access, "free")
         self.assertEqual(cfg.command_access, "free")
+        self.assertEqual(cfg.delete_access, "admin")  # destructive default: admin
+        self.assertEqual(cfg.tool_io_access, "free")
 
     def test_access_switch_parse(self):
         cfg = PluginConfig(
-            {"capture_access": "admin", "recall_access": "off", "tool_access": "bogus"}
+            {"capture_access": "admin", "recall_access": "off", "tool_access": "bogus",
+             "delete_access": "free", "tool_io_access": "admin"}
         )
         self.assertEqual(cfg.capture_access, "admin")
         self.assertEqual(cfg.recall_access, "off")
         self.assertEqual(cfg.tool_access, "free")  # invalid falls back
+        self.assertEqual(cfg.delete_access, "free")
+        self.assertEqual(cfg.tool_io_access, "admin")
+
+    def test_tool_io_backcompat(self):
+        # legacy capture_tool_io=false means off, absent means free
+        self.assertEqual(PluginConfig({"capture_tool_io": False}).tool_io_access, "off")
+        self.assertEqual(PluginConfig({"capture_tool_io": True}).tool_io_access, "free")
 
     def test_access_allowed_logic(self):
         # free: everyone

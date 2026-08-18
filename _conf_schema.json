@@ -53,6 +53,18 @@
     "default": "free",
     "hint": "三值开关：free=所有人可用 /记忆 命令；admin=仅管理员可用；off=命令返回已禁用。"
   },
+  "delete_access": {
+    "description": "删除记忆权限",
+    "type": "string",
+    "default": "admin",
+    "hint": "三值开关：free=所有人可删除；admin=仅管理员可删除；off=删除工具不注册、删除命令返回已禁用。清空全部记忆始终要求管理员且需二次确认。"
+  },
+  "tool_io_access": {
+    "description": "工具调用记录权限",
+    "type": "string",
+    "default": "free",
+    "hint": "三值开关：free=记录所有对话的工具调用到记忆；admin=仅管理员对话；off=不记录。未设置时沿用旧版 capture_tool_io 布尔开关。"
+  },
   "capture_bot_replies": {
     "description": "捕获机器人自己的回复",
     "type": "bool",
