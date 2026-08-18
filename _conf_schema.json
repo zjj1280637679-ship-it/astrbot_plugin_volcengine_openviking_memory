@@ -37,16 +37,14 @@
   },
   "recall_mode": {
     "description": "记忆召回方式",
-    "type": "enum",
+    "type": "string",
     "default": "auto",
-    "enum_values": ["auto", "tool", "both", "off"],
     "hint": "auto=每轮 LLM 请求前自动召回注入；tool=仅提供 ov_memory_search 工具让模型按需搜索；both=自动注入+工具；off=关闭召回（仅写不读）。"
   },
   "recall_api": {
     "description": "召回接口",
-    "type": "enum",
+    "type": "string",
     "default": "find",
-    "enum_values": ["find", "context"],
     "hint": "find=/api/v1/search/find 列表召回（兼容性最好）；context=/api/v1/search/search mode=context 服务端组装（若托管服务不支持会自动回退到 find）。"
   },
   "recall_limit": {

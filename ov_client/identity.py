@@ -21,6 +21,24 @@ def _clean(value: str, fallback: str) -> str:
     return text if text else fallback
 
 
+def _ascii_safe(value: str) -> str:
+    """Deterministic ASCII-only form of a label.
+
+    HTTP header values must be ASCII; platform sender ids / names may contain
+    CJK or other non-ASCII characters (e.g. a webchat account named
+    ``codex测试实例``). Non-ASCII codepoints are escaped as ``u<hex>`` so the
+    resulting agent id is stable (same input -> same id) and header-safe.
+    """
+    out: list[str] = []
+    for ch in str(value or ""):
+        code = ord(ch)
+        if code < 128:
+            out.append(ch)
+        else:
+            out.append(f"u{code:x}")
+    return "".join(out)
+
+
 def derive_agent_id(
     cfg: PluginConfig,
     platform: str,
@@ -35,12 +53,12 @@ def derive_agent_id(
     share ``<prefix>`` (one global memory space).
     """
     prefix = _clean(cfg.agent_id_prefix, "astrbot")
-    platform_clean = _clean(platform, "unknown").lower()
+    platform_clean = _ascii_safe(_clean(platform, "unknown").lower())
     if not cfg.scope_isolation:
         return prefix
     if str(group_id or "").strip():
-        return f"{prefix}:{platform_clean}:group:{_clean(group_id, '0')}"
-    return f"{prefix}:{platform_clean}:user:{_clean(sender_id, '0')}"
+        return f"{prefix}:{platform_clean}:group:{_ascii_safe(_clean(group_id, '0'))}"
+    return f"{prefix}:{platform_clean}:user:{_ascii_safe(_clean(sender_id, '0'))}"
 
 
 def derive_session_id(agent_id: str) -> str:
@@ -50,6 +68,6 @@ def derive_session_id(agent_id: str) -> str:
 
 
 def safe_peer_id(sender_id: str) -> str:
-    """A URL-safe peer label for a platform sender id."""
-    cleaned = _UNSAFE.sub("_", str(sender_id or ""))[:64]
+    """A URL-safe, ASCII-only peer label for a platform sender id."""
+    cleaned = _UNSAFE.sub("_", _ascii_safe(str(sender_id or "")))[:64]
     return cleaned if cleaned else "anonymous"

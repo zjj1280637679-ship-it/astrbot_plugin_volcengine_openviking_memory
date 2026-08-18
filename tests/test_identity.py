@@ -39,6 +39,21 @@ class TestIdentity(unittest.TestCase):
     def test_safe_peer_id(self):
         self.assertEqual(safe_peer_id("a/b c"), "a_b_c")
 
+    def test_non_ascii_agent_id_is_ascii_safe(self):
+        # A CJK account name must never leak into an HTTP header.
+        aid = derive_agent_id(self.cfg, "webchat", group_id="", sender_id="codex测试实例")
+        self.assertTrue(aid.isascii(), f"agent_id must be ASCII: {aid!r}")
+        self.assertNotIn("测", aid)
+        # Deterministic: same input -> same id.
+        aid2 = derive_agent_id(self.cfg, "webchat", group_id="", sender_id="codex测试实例")
+        self.assertEqual(aid, aid2)
+        # numeric senders (real WeChat) stay clean
+        num = derive_agent_id(self.cfg, "aiocqhttp", group_id="", sender_id="2881797534811672064")
+        self.assertEqual(num, "astrbot:aiocqhttp:user:2881797534811672064")
+
+    def test_safe_peer_id_ascii(self):
+        self.assertTrue(safe_peer_id("张三").isascii())
+
 
 if __name__ == "__main__":
     unittest.main()
