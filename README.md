@@ -49,6 +49,10 @@ LLM 请求前 ──► on_llm_request ──► 按当前消息 search/find ─
 | `scope_isolation` | `true` | 按用户/群隔离记忆空间 |
 | `capture_enabled` | `true` | 自动捕获对话写入记忆 |
 | `capture_bot_replies` | `true` | 同时捕获机器人回复 |
+| `capture_access` | `free` | 对话捕获权限（三值） |
+| `recall_access` | `free` | 自动召回注入权限（三值） |
+| `tool_access` | `free` | LLM 工具权限（三值） |
+| `command_access` | `free` | 管理命令权限（三值） |
 | `recall_mode` | `auto` | 召回方式：`auto` 自动注入 / `tool` 仅工具 / `both` 双模式 / `off` 关闭 |
 | `recall_api` | `find` | 召回接口：`find`（列表，兼容最好）/ `context`（服务端组装，不支持时自动回退） |
 | `recall_limit` | `8` | 最多召回条数（1-30） |
@@ -61,6 +65,23 @@ LLM 请求前 ──► on_llm_request ──► 按当前消息 search/find ─
 | `capture_tool_io` | `false` | 是否把模型工具调用写入记忆 |
 | `request_timeout_seconds` | `60` | API 请求超时 |
 | `debug_log` | `false` | 详细日志 |
+
+## 权限控制（三值开关）
+
+捕获、自动召回、模型工具、管理命令四个功能各自有独立的三值开关：
+
+| 取值 | 含义 |
+|------|------|
+| `free` | 所有用户/对话可用（默认） |
+| `admin` | 仅管理员对话可用；普通用户触发时返回"仅管理员可用" |
+| `off` | 禁用；**模型工具直接不注册**，模型看不到 `ov_memory_search` / `ov_memory_remember` |
+
+管理员判定：优先平台上报的角色（`event.is_admin()`，群主/群管理），兜底比对 AstrBot 配置的 `admins_id` 列表。
+
+典型用法：
+- `capture_access=admin` + `recall_access=admin`：记忆只服务机器人管理员，普通群友的闲聊不会污染记忆库
+- `tool_access=off`：完全不给模型提供记忆工具（仅保留自动注入）
+- `command_access=admin`：`/记忆` 命令只有管理员能操作
 
 ## 指令与工具
 

@@ -8,7 +8,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ov_client.client import OVClient
-from ov_client.config import PluginConfig
+from ov_client.config import PluginConfig, access_allowed
 from ov_client.recall import _dedup, _format_find_block, recall_and_format, recall_for_tool
 from tests.mock_ov import MockOVServer
 
@@ -93,6 +93,34 @@ class TestConfig(unittest.TestCase):
     def test_base_url_strip(self):
         cfg = PluginConfig({"ov_base_url": "https://x.example.com/"})
         self.assertEqual(cfg.ov_base_url, "https://x.example.com")
+
+    def test_access_switch_defaults(self):
+        cfg = PluginConfig({})
+        self.assertEqual(cfg.capture_access, "free")
+        self.assertEqual(cfg.recall_access, "free")
+        self.assertEqual(cfg.tool_access, "free")
+        self.assertEqual(cfg.command_access, "free")
+
+    def test_access_switch_parse(self):
+        cfg = PluginConfig(
+            {"capture_access": "admin", "recall_access": "off", "tool_access": "bogus"}
+        )
+        self.assertEqual(cfg.capture_access, "admin")
+        self.assertEqual(cfg.recall_access, "off")
+        self.assertEqual(cfg.tool_access, "free")  # invalid falls back
+
+    def test_access_allowed_logic(self):
+        # free: everyone
+        self.assertTrue(access_allowed("free", False))
+        self.assertTrue(access_allowed("free", True))
+        # admin: only admins
+        self.assertTrue(access_allowed("admin", True))
+        self.assertFalse(access_allowed("admin", False))
+        # off: nobody
+        self.assertFalse(access_allowed("off", True))
+        self.assertFalse(access_allowed("off", False))
+        # invalid input behaves like free
+        self.assertTrue(access_allowed("", False))
 
 
 if __name__ == "__main__":

@@ -29,6 +29,30 @@
     "default": true,
     "hint": "开启后用户消息与机器人回复自动写入 OpenViking 会话。"
   },
+  "capture_access": {
+    "description": "对话捕获权限",
+    "type": "string",
+    "default": "free",
+    "hint": "三值开关：free=所有对话都捕获；admin=仅管理员对话捕获（普通用户消息不写入记忆）；off=完全不捕获。"
+  },
+  "recall_access": {
+    "description": "自动召回注入权限",
+    "type": "string",
+    "default": "free",
+    "hint": "三值开关：free=所有对话都在 LLM 请求前召回记忆；admin=仅管理员对话召回注入；off=关闭自动召回。"
+  },
+  "tool_access": {
+    "description": "LLM 工具权限",
+    "type": "string",
+    "default": "free",
+    "hint": "三值开关：free=所有人可用 ov_memory_search/ov_memory_remember；admin=仅管理员对话可调用（普通用户对话调用返回无权限）；off=工具不注册，模型看不到。"
+  },
+  "command_access": {
+    "description": "管理命令权限",
+    "type": "string",
+    "default": "free",
+    "hint": "三值开关：free=所有人可用 /记忆 命令；admin=仅管理员可用；off=命令返回已禁用。"
+  },
   "capture_bot_replies": {
     "description": "捕获机器人自己的回复",
     "type": "bool",

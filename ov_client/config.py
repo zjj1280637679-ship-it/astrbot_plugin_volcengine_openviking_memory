@@ -11,6 +11,20 @@ from typing import Any
 
 RECALL_MODES = ("auto", "tool", "both", "off")
 RECALL_APIS = ("find", "context")
+ACCESS_MODES = ("free", "admin", "off")
+
+
+def access_allowed(mode: str, is_admin: bool) -> bool:
+    """Pure permission check for the three-value access switches.
+
+    mode "free" -> everyone allowed; "admin" -> only admins; "off" -> nobody.
+    """
+    mode = str(mode or "free").strip().lower()
+    if mode == "off":
+        return False
+    if mode == "admin":
+        return bool(is_admin)
+    return True
 
 
 def _bounded(value: Any, default: float, minimum: float, maximum: float) -> float:
@@ -98,6 +112,28 @@ class PluginConfig:
     @property
     def capture_tool_io(self) -> bool:
         return bool(self.raw.get("capture_tool_io", False))
+
+    # -- three-value access switches (free / admin / off) ----------------------
+
+    @property
+    def capture_access(self) -> str:
+        """对话捕获权限：free=所有对话 / admin=仅管理员对话 / off=不捕获。"""
+        return _enum(self.raw.get("capture_access"), ACCESS_MODES, "free")
+
+    @property
+    def recall_access(self) -> str:
+        """自动召回注入权限。"""
+        return _enum(self.raw.get("recall_access"), ACCESS_MODES, "free")
+
+    @property
+    def tool_access(self) -> str:
+        """LLM 工具权限；off 时不注册工具（模型看不到）。"""
+        return _enum(self.raw.get("tool_access"), ACCESS_MODES, "free")
+
+    @property
+    def command_access(self) -> str:
+        """管理命令权限；off 时命令返回已禁用。"""
+        return _enum(self.raw.get("command_access"), ACCESS_MODES, "free")
 
     @property
     def request_timeout_seconds(self) -> int:

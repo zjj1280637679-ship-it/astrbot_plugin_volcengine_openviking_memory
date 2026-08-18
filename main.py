@@ -20,7 +20,7 @@ from astrbot.core.star.filter.command import GreedyStr
 
 from .ov_client.client import OVClient, OVError
 from .ov_client.commit_scheduler import CommitScheduler
-from .ov_client.config import PluginConfig
+from .ov_client.config import PluginConfig, access_allowed
 from .ov_client.identity import derive_agent_id, derive_session_id
 from .ov_client.parts import (
     assistant_text_part,
@@ -65,10 +65,24 @@ class VolcengineOpenVikingMemory(Star):
         self._sessions_ready: set[str] = set()
         self._sessions_lock = asyncio.Lock()
         self._key_warned = False
+        # tool_access=off -> remove the LLM tools so the model never sees them.
+        # Runs at instance init so it also applies on hot plugin reload (the
+        # on_astrbot_loaded hook only fires once at full startup).
+        if self.cfg.tool_access == "off":
+            self._hide_tools()
         if not self.cfg.ov_api_key:
             logger.warning(
                 "[OV] 未配置 OpenViking API Key（请在插件配置页填写 ov_api_key）"
             )
+
+    def _hide_tools(self) -> None:
+        try:
+            mgr = self.context.get_llm_tool_manager()
+            for name in ("ov_memory_search", "ov_memory_remember"):
+                mgr.remove_func(name)
+            logger.info("[OV] tool_access=off，已隐藏 ov_memory_search/ov_memory_remember")
+        except Exception as exc:
+            logger.warning("[OV] 隐藏工具失败：%s", exc)
 
     # ------------------------------------------------------------------ utils
 
@@ -89,6 +103,25 @@ class VolcengineOpenVikingMemory(Star):
             "sender_name": str(getattr(event, "get_sender_name", lambda: "")() or ""),
             "text": str(getattr(event, "message_str", "") or ""),
         }
+
+    def _is_admin(self, event: AstrMessageEvent) -> bool:
+        """管理员判定：优先平台角色，兜底比对 AstrBot admins_id 配置。"""
+        try:
+            if event.is_admin():
+                return True
+        except Exception:
+            pass
+        try:
+            cfg = self.context.get_config()
+            admin_ids = (cfg.get("admins_id") or []) if hasattr(cfg, "get") else []
+            sender = str(event.get_sender_id() or "")
+            return bool(sender and sender in {str(a) for a in admin_ids})
+        except Exception:
+            return False
+
+    def _access_allowed(self, event: AstrMessageEvent, mode: str) -> bool:
+        """三值开关判定：free=所有人 / admin=仅管理员 / off=禁用。"""
+        return access_allowed(mode, self._is_admin(event))
 
     def _is_our_command(self, text: str) -> bool:
         stripped = str(text or "").strip()
@@ -122,6 +155,9 @@ class VolcengineOpenVikingMemory(Star):
 
     @filter.on_astrbot_loaded()
     async def on_loaded(self):
+        if self.cfg.tool_access == "off":
+            # Belt-and-suspenders: also hide on full startup after all plugins load.
+            self._hide_tools()
         if not self._ready():
             return
         healthy = await self.ov.health()
@@ -140,6 +176,8 @@ class VolcengineOpenVikingMemory(Star):
     @filter.event_message_type(EventMessageType.ALL)
     async def on_user_message(self, event: AstrMessageEvent):
         if not self.cfg.capture_enabled or not self._ready():
+            return
+        if not self._access_allowed(event, self.cfg.capture_access):
             return
         info = self._event_info(event)
         if self._is_our_command(info["text"]):
@@ -172,6 +210,8 @@ class VolcengineOpenVikingMemory(Star):
     async def on_llm_request(self, event: AstrMessageEvent, req: Any):
         if self.cfg.recall_mode not in ("auto", "both") or not self._ready():
             return
+        if not self._access_allowed(event, self.cfg.recall_access):
+            return
         info = self._event_info(event)
         query = info["text"].strip()
         if not query:
@@ -197,6 +237,8 @@ class VolcengineOpenVikingMemory(Star):
     @filter.on_llm_response()
     async def on_llm_response(self, event: AstrMessageEvent, resp: Any):
         if not self.cfg.capture_enabled or not self.cfg.capture_bot_replies or not self._ready():
+            return
+        if not self._access_allowed(event, self.cfg.capture_access):
             return
         reply_text = ""
         if hasattr(resp, "completion_text"):
@@ -284,6 +326,10 @@ class VolcengineOpenVikingMemory(Star):
         """
         if not self._ready():
             return json.dumps({"error": "OpenViking API Key 未配置"}, ensure_ascii=False)
+        if self.cfg.tool_access == "off":
+            return json.dumps({"error": "记忆工具已禁用"}, ensure_ascii=False)
+        if not self._access_allowed(event, self.cfg.tool_access):
+            return json.dumps({"error": "记忆工具仅管理员可用"}, ensure_ascii=False)
         info = self._event_info(event)
         agent_id = derive_agent_id(self.cfg, info["platform"], info["group_id"], info["sender_id"])
         try:
@@ -311,6 +357,10 @@ class VolcengineOpenVikingMemory(Star):
         """
         if not self._ready():
             return json.dumps({"error": "OpenViking API Key 未配置"}, ensure_ascii=False)
+        if self.cfg.tool_access == "off":
+            return json.dumps({"error": "记忆工具已禁用"}, ensure_ascii=False)
+        if not self._access_allowed(event, self.cfg.tool_access):
+            return json.dumps({"error": "记忆工具仅管理员可用"}, ensure_ascii=False)
         text = str(content or "").strip()
         if not text:
             return json.dumps({"error": "content 不能为空"}, ensure_ascii=False)
@@ -330,6 +380,12 @@ class VolcengineOpenVikingMemory(Star):
     @filter.command("记忆")
     async def cmd_memory(self, event: AstrMessageEvent, arg: GreedyStr):
         """记忆管理：状态｜搜索 <词>｜提交。"""
+        if self.cfg.command_access == "off":
+            yield event.plain_result("记忆功能已禁用。")
+            return
+        if not self._access_allowed(event, self.cfg.command_access):
+            yield event.plain_result("无权限：记忆命令仅管理员可用。")
+            return
         text = str(arg or "").strip()
         try:
             if not text or text == "状态":
@@ -359,6 +415,8 @@ class VolcengineOpenVikingMemory(Star):
             f"Agent：{agent_id}",
             f"会话：{session_id}",
             f"召回模式：{self.cfg.recall_mode}（接口 {self.cfg.recall_api}）",
+            f"权限：捕获={self.cfg.capture_access} 召回={self.cfg.recall_access} "
+            f"工具={self.cfg.tool_access} 命令={self.cfg.command_access}",
             f"待提交：{sched['pending_messages']} 条 / ~{sched['pending_tokens']} tokens",
             f"上次提交：{_fmt_ts(sched['last_commit_ts'])}",
         ]
