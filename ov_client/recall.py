@@ -17,6 +17,18 @@ _PREFERENCE_RE = re.compile(
     r"prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向|讨厌|不喜欢", re.I
 )
 _TOKEN_RE = re.compile(r"[a-z0-9\u4e00-\u9fff]{2,}", re.I)
+# Derived/structural files are index scaffolding, not knowledge: never inject them.
+_STRUCTURAL_SUFFIXES = (
+    ".abstract.md",
+    ".overview.md",
+    ".relations.json",
+    ".recall_log.json",
+)
+
+
+def _is_structural(uri: str) -> bool:
+    lowered = str(uri or "").lower()
+    return any(lowered.endswith(s) for s in _STRUCTURAL_SUFFIXES)
 _STOPWORDS = {
     "what", "when", "where", "which", "who", "whom", "whose", "why", "how",
     "did", "does", "is", "are", "was", "were", "the", "and", "for", "with",
@@ -107,13 +119,17 @@ async def recall_and_format(
         agent_id=agent_id,
         limit=max(cfg.recall_limit * 2, 8),
         score_threshold=cfg.recall_min_score,
-        target_uri=cfg.recall_target_uri,
+        target_uri=cfg.effective_recall_target,
     )
     if not items:
         return None
 
     profile = _query_profile(query)
-    filtered = [it for it in items if it.get("score", 0) >= cfg.recall_min_score]
+    filtered = [
+        it
+        for it in items
+        if it.get("score", 0) >= cfg.recall_min_score and not _is_structural(it.get("uri", ""))
+    ]
     filtered.sort(key=lambda it: _rank(it, profile), reverse=True)
     picked = _dedup(filtered)[: cfg.recall_limit]
     if not picked:
@@ -135,10 +151,14 @@ async def recall_for_tool(
         agent_id=agent_id,
         limit=max(effective_limit * 2, 8),
         score_threshold=cfg.recall_min_score,
-        target_uri=cfg.recall_target_uri,
+        target_uri=cfg.effective_recall_target,
     )
     profile = _query_profile(query)
-    filtered = [it for it in items if it.get("score", 0) >= cfg.recall_min_score]
+    filtered = [
+        it
+        for it in items
+        if it.get("score", 0) >= cfg.recall_min_score and not _is_structural(it.get("uri", ""))
+    ]
     filtered.sort(key=lambda it: _rank(it, profile), reverse=True)
     picked = _dedup(filtered)[:effective_limit]
     return {

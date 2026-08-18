@@ -76,6 +76,18 @@ class TestOVClient(unittest.TestCase):
         finally:
             MockOVHandler.fail_search_context = False
 
+    def test_read_content_string_result(self):
+        # content/read returns result as a plain string
+        MockOVHandler.read_contents["viking://resources/kb/a.md"] = "# 年假政策\n\n5 天"
+        text = run(self.client.read_content("viking://resources/kb/a.md", "agent-1"))
+        self.assertEqual(text, "# 年假政策\n\n5 天")
+
+    def test_delete_retries_on_503(self):
+        # first attempt 503, retry succeeds
+        MockOVHandler.fail_delete_once.add("viking://resources/kb/tmp.md")
+        result = run(self.client.delete_uri("viking://resources/kb/tmp.md", "agent-1"))
+        self.assertEqual(result.get("result", {}).get("estimated_deleted_count"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,8 @@ class MockOVHandler(BaseHTTPRequestHandler):
     messages: dict = {}
     committed: dict = {}
     fail_search_context = False
+    read_contents: dict = {}  # uri -> text
+    fail_delete_once: set = set()  # uris that should 503 once then succeed
 
     def log_message(self, *args):
         pass
@@ -38,6 +40,12 @@ class MockOVHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/health":
             return self._send(200, {"status": "ok"})
+        if path.startswith("/api/v1/content/read"):
+            if not self._auth_ok():
+                return self._send(401, {"status": "error", "error": {"code": "AuthenticationError"}})
+            uri = self._body_uri_from_query()
+            content = self.read_contents.get(uri, "")
+            return self._send(200, {"status": "ok", "result": content})
         if path.startswith("/api/v1/sessions/"):
             if not self._auth_ok():
                 return self._send(401, {"status": "error", "error": {"code": "AuthenticationError"}})
@@ -46,6 +54,26 @@ class MockOVHandler(BaseHTTPRequestHandler):
                 self.sessions.setdefault(sid, True)
                 return self._send(200, {"status": "ok", "result": {"session_id": sid, "uri": f"viking://user/test/sessions/{sid}"}})
             return self._send(404, {"status": "error", "error": {"code": "NotFound"}})
+        return self._send(404, {"status": "error"})
+
+    def _body_uri_from_query(self) -> str:
+        from urllib.parse import parse_qs, unquote
+
+        query = urlparse(self.path).query
+        params = parse_qs(query)
+        raw = params.get("uri", [""])[0]
+        return unquote(raw)
+
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        if path == "/api/v1/fs":
+            if not self._auth_ok():
+                return self._send(401, {"status": "error", "error": {"code": "AuthenticationError"}})
+            uri = self._body_uri_from_query()
+            if uri in self.fail_delete_once:
+                self.fail_delete_once.discard(uri)
+                return self._send(503, {"status": "error", "error": {"code": "UNAVAILABLE", "message": "lock lease error"}})
+            return self._send(200, {"status": "ok", "result": {"uri": uri, "estimated_deleted_count": 1}})
         return self._send(404, {"status": "error"})
 
     def do_POST(self):
@@ -96,6 +124,15 @@ class MockOVHandler(BaseHTTPRequestHandler):
                             "score": 0.3,
                             "category": "entities",
                             "abstract": "用户名叫小测。",
+                            "overview": "",
+                        },
+                        {
+                            "uri": "viking://resources/kb/.abstract.md",
+                            "context_type": "resource",
+                            "level": 0,
+                            "score": 0.8,
+                            "category": "",
+                            "abstract": "本知识库当前未存储独立文件。",
                             "overview": "",
                         },
                     ],

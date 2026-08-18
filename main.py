@@ -80,6 +80,11 @@ class VolcengineOpenVikingMemory(Star):
             hidden += ["ov_memory_search", "ov_memory_remember"]
         if self.cfg.delete_access == "off":
             hidden.append("ov_memory_delete")
+        if self.cfg.knowledge_base_mode:
+            # 知识库模式：模型只读，写入/删除工具不暴露（知识仅管理员经 /知识 输入）。
+            for name in ("ov_memory_remember", "ov_memory_delete"):
+                if name not in hidden:
+                    hidden.append(name)
         if not hidden:
             return
         try:
@@ -180,6 +185,8 @@ class VolcengineOpenVikingMemory(Star):
 
     @filter.event_message_type(EventMessageType.ALL)
     async def on_user_message(self, event: AstrMessageEvent):
+        if self.cfg.knowledge_base_mode:
+            return  # 知识库模式：不从对话学习
         if not self.cfg.capture_enabled or not self._ready():
             return
         if not self._access_allowed(event, self.cfg.capture_access):
@@ -241,6 +248,8 @@ class VolcengineOpenVikingMemory(Star):
 
     @filter.on_llm_response()
     async def on_llm_response(self, event: AstrMessageEvent, resp: Any):
+        if self.cfg.knowledge_base_mode:
+            return  # 知识库模式：不沉淀机器人回复
         if not self.cfg.capture_enabled or not self.cfg.capture_bot_replies or not self._ready():
             return
         if not self._access_allowed(event, self.cfg.capture_access):
@@ -449,8 +458,10 @@ class VolcengineOpenVikingMemory(Star):
         healthy = await self.ov.health()
         sched = self.scheduler.status(agent_id)
         scope = "按会话隔离" if self.cfg.scope_isolation else "全局共享"
+        mode = "知识库模式" if self.cfg.knowledge_base_mode else "记忆模式"
         lines = [
             f"火山方舟 Agent 记忆插件 v{VERSION}",
+            f"模式：{mode}",
             f"服务：{self.cfg.ov_base_url}（{'OK' if healthy else '不可达'}）",
             f"API Key：{'已配置' if self.cfg.ov_api_key else '未配置'}",
             f"隔离：{scope}",
@@ -463,6 +474,8 @@ class VolcengineOpenVikingMemory(Star):
             f"待提交：{sched['pending_messages']} 条 / ~{sched['pending_tokens']} tokens",
             f"上次提交：{_fmt_ts(sched['last_commit_ts'])}",
         ]
+        if self.cfg.knowledge_base_mode:
+            lines.append(f"知识库根：{self.cfg.knowledge_root}")
         return "\n".join(lines)
 
     async def _cmd_search(self, event: AstrMessageEvent, query: str) -> str:
@@ -522,3 +535,109 @@ class VolcengineOpenVikingMemory(Star):
             return "已清空全部记忆。"
         except OVError as exc:
             return f"清空失败：{exc}"
+
+    # ------------------------------------------------------------- knowledge base
+
+    @filter.command("知识")
+    async def cmd_knowledge(self, event: AstrMessageEvent, arg: GreedyStr):
+        """知识库管理（知识库模式）：添加｜列表｜查看｜删除｜状态。"""
+        if self.cfg.command_access == "off":
+            yield event.plain_result("知识功能已禁用。")
+            return
+        if not self._access_allowed(event, self.cfg.command_access):
+            yield event.plain_result("无权限：知识命令仅管理员可用。")
+            return
+        text = str(arg or "").strip()
+        try:
+            if not text or text == "状态":
+                output = await self._kb_status(event)
+            elif text.startswith("添加 "):
+                output = await self._kb_add(event, text[3:].strip())
+            elif text == "列表" or text == "list":
+                output = await self._kb_list(event)
+            elif text.startswith("查看 "):
+                output = await self._kb_read(event, text[3:].strip())
+            elif text.startswith("删除 "):
+                output = await self._kb_delete(event, text[3:].strip())
+            else:
+                output = "用法：/知识 添加 <内容>｜列表｜查看 <uri>｜删除 <uri>｜状态"
+        except Exception as exc:
+            output = f"知识操作失败：{exc}"
+        yield event.plain_result(output)
+
+    async def _kb_status(self, event: AstrMessageEvent) -> str:
+        info = self._event_info(event)
+        agent_id = derive_agent_id(self.cfg, info["platform"], info["group_id"], info["sender_id"])
+        root = self.cfg.knowledge_root
+        entries = await self.ov.list_dir(root, agent_id=agent_id, recursive=True)
+        files = [e for e in entries if not e.get("isDir")]
+        return "\n".join([
+            "知识库模式（后台输入，AI 召回）",
+            f"知识根：{root}",
+            f"知识条目：{len(files)} 条",
+            f"召回范围：{self.cfg.effective_recall_target or '默认全局'}",
+            f"当前管理员判定：{'是' if self._is_admin(event) else '否'}",
+        ])
+
+    async def _kb_add(self, event: AstrMessageEvent, content: str) -> str:
+        """添加一条知识（仅管理员；后台输入）。"""
+        if not self.cfg.knowledge_base_mode:
+            return "当前是记忆模式。请在插件配置页开启 knowledge_base_mode 后使用知识库。"
+        if not self._is_admin(event):
+            return "无权限：知识添加仅管理员可用（后台输入）。"
+        text = str(content or "").strip()
+        if not text:
+            return "内容不能为空。用法：/知识 添加 <内容>"
+        info = self._event_info(event)
+        agent_id = derive_agent_id(self.cfg, info["platform"], info["group_id"], info["sender_id"])
+        root = self.cfg.knowledge_root
+        name = f"kb_{time.strftime('%Y%m%d_%H%M%S')}.md"
+        uri = f"{root}/{name}"
+        try:
+            await self.ov.write_content(uri, text, mode="create", wait=True, agent_id=agent_id)
+            return f"已添加知识：{uri}\n（等待向量索引完成后即可被 AI 检索）"
+        except OVError as exc:
+            return f"添加失败：{exc}"
+
+    async def _kb_list(self, event: AstrMessageEvent) -> str:
+        info = self._event_info(event)
+        agent_id = derive_agent_id(self.cfg, info["platform"], info["group_id"], info["sender_id"])
+        root = self.cfg.knowledge_root
+        entries = await self.ov.list_dir(root, agent_id=agent_id, recursive=True)
+        files = [e for e in entries if not e.get("isDir")]
+        if not files:
+            return f"知识库为空（{root}）。可用 /知识 添加 输入知识。"
+        lines = [f"知识库共 {len(files)} 条："]
+        for e in files:
+            size = e.get("size", 0)
+            lines.append(f"\n- {e.get('uri')}（{size} B）")
+        return "\n".join(lines)
+
+    async def _kb_read(self, event: AstrMessageEvent, uri: str) -> str:
+        text_uri = str(uri or "").strip()
+        if not text_uri.startswith("viking://"):
+            return "请输入 viking:// 开头的知识 URI（可用 /知识 列表 查看）。"
+        info = self._event_info(event)
+        agent_id = derive_agent_id(self.cfg, info["platform"], info["group_id"], info["sender_id"])
+        try:
+            content = await self.ov.read_content(text_uri, agent_id=agent_id)
+        except OVError as exc:
+            return f"读取失败：{exc}"
+        if not content:
+            return "内容为空。"
+        return content[:1500] + ("\n…（已截断）" if len(content) > 1500 else "")
+
+    async def _kb_delete(self, event: AstrMessageEvent, uri: str) -> str:
+        """删除一条知识（仅管理员）。"""
+        if not self._is_admin(event):
+            return "无权限：知识删除仅管理员可用。"
+        text_uri = str(uri or "").strip()
+        if not text_uri.startswith("viking://"):
+            return "请输入 viking:// 开头的知识 URI（可用 /知识 列表 查看）。"
+        info = self._event_info(event)
+        agent_id = derive_agent_id(self.cfg, info["platform"], info["group_id"], info["sender_id"])
+        try:
+            await self.ov.delete_uri(text_uri, agent_id=agent_id)
+            return f"已删除知识：{text_uri}"
+        except OVError as exc:
+            return f"删除失败：{exc}"

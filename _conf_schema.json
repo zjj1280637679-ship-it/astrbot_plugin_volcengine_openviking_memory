@@ -29,6 +29,18 @@
     "default": true,
     "hint": "开启后用户消息与机器人回复自动写入 OpenViking 会话。"
   },
+  "knowledge_base_mode": {
+    "description": "知识库模式",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后行为接近知识库：关闭对话自动捕获（不从闲聊学习），知识仅管理员可通过 /知识 添加 命令写入 viking://resources/kb/，AI 对话时检索召回（模型只读，写入/删除工具隐藏）。关闭则保持记忆模式（自动学习对话）。"
+  },
+  "knowledge_root": {
+    "description": "知识库根目录",
+    "type": "string",
+    "default": "viking://resources/kb",
+    "hint": "知识条目存放的 viking:// 资源目录；知识库模式下召回默认收窄到该目录。"
+  },
   "capture_access": {
     "description": "对话捕获权限",
     "type": "string",

@@ -156,25 +156,83 @@ class OVClient:
         )
         return self._unwrap(body)
 
-    async def delete_uri(self, uri: str, agent_id: str = "", recursive: bool = True) -> dict[str, Any]:
-        """Delete a viking:// file or directory (idempotent)."""
+    async def delete_uri(self, uri: str, agent_id: str = "", recursive: bool = True, retries: int = 3) -> dict[str, Any]:
+        """Delete a viking:// file or directory (idempotent).
+
+        The hosted service can transiently return 503 (lock lease errors) under
+        concurrent ops; retry a few times before giving up.
+        """
         import urllib.parse as _parse
+        import asyncio as _aio
 
         path = f"/api/v1/fs?uri={_parse.quote(uri, safe='/:@')}&recursive={str(recursive).lower()}"
         url = f"{self.base_url}{path}"
-        try:
-            resp = await self._http.request(
-                "DELETE", url, headers=self._headers(agent_id)
-            )
-        except httpx.HTTPError as exc:
-            raise OVError(f"网络错误 {url}: {exc}") from exc
-        self._log("DELETE", url, resp.status_code, resp.text[:300])
-        if resp.status_code != 200:
-            raise OVError(f"HTTP {resp.status_code}: {resp.text[:300]}")
-        try:
-            return resp.json()
-        except json.JSONDecodeError as exc:
-            raise OVError("响应不是 JSON") from exc
+        last_exc: OVError | None = None
+        for attempt in range(max(1, retries)):
+            try:
+                resp = await self._http.request(
+                    "DELETE", url, headers=self._headers(agent_id)
+                )
+                self._log("DELETE", url, resp.status_code, resp.text[:300])
+                if resp.status_code == 200:
+                    try:
+                        return resp.json()
+                    except json.JSONDecodeError as exc:
+                        raise OVError("响应不是 JSON") from exc
+                if resp.status_code != 503:
+                    raise OVError(f"HTTP {resp.status_code}: {resp.text[:300]}")
+                # 503: transient lock/backend unavailability -> retry
+                last_exc = OVError(f"HTTP 503: {resp.text[:200]}")
+            except httpx.HTTPError as exc:
+                raise OVError(f"网络错误 {url}: {exc}") from exc
+            if attempt + 1 < max(1, retries):
+                await _aio.sleep(2 + attempt * 2)
+        raise OVError(str(last_exc or "删除失败（服务暂时不可用）"))
+
+    # -- knowledge base (resources) -------------------------------------------
+
+    async def write_content(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "create",
+        wait: bool = True,
+        agent_id: str = "",
+    ) -> dict[str, Any]:
+        """Write a text knowledge entry to a viking:// resources URI."""
+        body = await self._post(
+            "/api/v1/content/write",
+            {"uri": uri, "content": content, "mode": mode, "wait": wait},
+            agent_id,
+        )
+        return self._unwrap(body)
+
+    async def read_content(self, uri: str, agent_id: str = "") -> str:
+        """Read raw text content of a viking:// file (result is a plain string)."""
+        import urllib.parse as _parse
+
+        body = await self._get(
+            f"/api/v1/content/read?uri={_parse.quote(uri, safe='/:@')}", agent_id
+        )
+        result = body.get("result")
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict):
+            return str(result.get("content") or result.get("text") or "")
+        return ""
+
+    async def list_dir(self, uri: str, agent_id: str = "", recursive: bool = False) -> list[dict[str, Any]]:
+        """List entries under a viking:// directory."""
+        import urllib.parse as _parse
+
+        q = f"uri={_parse.quote(uri, safe='/:@')}"
+        if recursive:
+            q += "&recursive=true"
+        body = await self._get(f"/api/v1/fs/ls?{q}", agent_id)
+        result = body.get("result")
+        if isinstance(result, list):
+            return result
+        return []
 
     # -- search ---------------------------------------------------------------
 

@@ -46,6 +46,14 @@ class TestRecall(unittest.TestCase):
         self.assertIsNotNone(block)
         self.assertIn("冰美式", block)
 
+    def test_recall_filters_structural_files(self):
+        # .abstract.md (score 0.8) must be filtered even though it passes the threshold
+        cfg = PluginConfig({"recall_min_score": 0.3, "recall_limit": 8})
+        block = run(recall_and_format(self.client, cfg, "知识库", "agent-1"))
+        self.assertIsNotNone(block)
+        self.assertNotIn("本知识库当前未存储独立文件", block)
+        self.assertNotIn(".abstract.md", block)
+
     def test_recall_for_tool_shape(self):
         cfg = PluginConfig({"recall_limit": 5, "recall_min_score": 0})
         result = run(recall_for_tool(self.client, cfg, "咖啡", "agent-1"))
@@ -118,6 +126,22 @@ class TestConfig(unittest.TestCase):
         # legacy capture_tool_io=false means off, absent means free
         self.assertEqual(PluginConfig({"capture_tool_io": False}).tool_io_access, "off")
         self.assertEqual(PluginConfig({"capture_tool_io": True}).tool_io_access, "free")
+
+    def test_knowledge_base_mode(self):
+        self.assertFalse(PluginConfig({}).knowledge_base_mode)
+        cfg = PluginConfig({"knowledge_base_mode": True})
+        self.assertTrue(cfg.knowledge_base_mode)
+        self.assertEqual(cfg.knowledge_root, "viking://resources/kb")
+        # KB mode scopes recall to the knowledge root by default
+        self.assertEqual(cfg.effective_recall_target, "viking://resources/kb")
+        # explicit recall_target_uri wins over KB root
+        cfg2 = PluginConfig({"knowledge_base_mode": True, "recall_target_uri": "viking://resources/all"})
+        self.assertEqual(cfg2.effective_recall_target, "viking://resources/all")
+        # non-KB mode with no explicit target -> empty (global recall)
+        self.assertEqual(PluginConfig({}).effective_recall_target, "")
+        # custom knowledge_root
+        cfg3 = PluginConfig({"knowledge_base_mode": True, "knowledge_root": "viking://resources/docs/"})
+        self.assertEqual(cfg3.knowledge_root, "viking://resources/docs")
 
     def test_access_allowed_logic(self):
         # free: everyone

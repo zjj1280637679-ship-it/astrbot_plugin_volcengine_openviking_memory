@@ -150,6 +150,28 @@ class PluginConfig:
             return "free"
         return _enum(mode, ACCESS_MODES, "free")
 
+    # -- knowledge-base mode ---------------------------------------------------
+
+    @property
+    def knowledge_base_mode(self) -> bool:
+        """知识库模式：关闭对话自动捕获，知识仅管理员经 /知识 命令写入，AI 检索召回。"""
+        return bool(self.raw.get("knowledge_base_mode", False))
+
+    @property
+    def knowledge_root(self) -> str:
+        """知识库根 URI（知识条目存放的资源目录）。"""
+        root = str(self.raw.get("knowledge_root") or "viking://resources/kb").strip()
+        return root.rstrip("/")
+
+    @property
+    def effective_recall_target(self) -> str:
+        """召回范围：显式配置优先；知识库模式下默认收窄到 knowledge_root。"""
+        if self.recall_target_uri:
+            return self.recall_target_uri
+        if self.knowledge_base_mode:
+            return self.knowledge_root
+        return ""
+
     @property
     def request_timeout_seconds(self) -> int:
         return _bounded_int(self.raw.get("request_timeout_seconds"), 60, 10, 300)
