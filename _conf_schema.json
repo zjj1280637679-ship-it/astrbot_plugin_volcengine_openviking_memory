@@ -1,0 +1,112 @@
+{
+  "ov_base_url": {
+    "description": "OpenViking Context 服务地址",
+    "type": "string",
+    "default": "https://api.vikingdb.cn-beijing.volces.com/openviking",
+    "hint": "火山方舟 Agent Plan「Agent 记忆」托管服务默认地址；一般无需修改。"
+  },
+  "ov_api_key": {
+    "description": "OpenViking API Key",
+    "type": "string",
+    "default": "",
+    "hint": "在 OpenViking Context 控制台 → 用户管理 页面复制（不是方舟 ark- 开头的模型 Key）。此 Key 会写入 AstrBot 本地配置，不会提交到仓库。"
+  },
+  "agent_id_prefix": {
+    "description": "Agent ID 前缀",
+    "type": "string",
+    "default": "astrbot",
+    "hint": "用于 X-OpenViking-Agent 头的命名空间前缀，区分不同机器人。"
+  },
+  "scope_isolation": {
+    "description": "按会话隔离记忆空间",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后每个用户/群使用独立的 X-OpenViking-Agent，记忆互不串；关闭则所有对话共享一个记忆空间。"
+  },
+  "capture_enabled": {
+    "description": "自动捕获对话写入记忆",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后用户消息与机器人回复自动写入 OpenViking 会话。"
+  },
+  "capture_bot_replies": {
+    "description": "捕获机器人自己的回复",
+    "type": "bool",
+    "default": true,
+    "hint": "把机器人回复也写入记忆，让记忆提取上下文更完整。"
+  },
+  "recall_mode": {
+    "description": "记忆召回方式",
+    "type": "enum",
+    "default": "auto",
+    "enum_values": ["auto", "tool", "both", "off"],
+    "hint": "auto=每轮 LLM 请求前自动召回注入；tool=仅提供 ov_memory_search 工具让模型按需搜索；both=自动注入+工具；off=关闭召回（仅写不读）。"
+  },
+  "recall_api": {
+    "description": "召回接口",
+    "type": "enum",
+    "default": "find",
+    "enum_values": ["find", "context"],
+    "hint": "find=/api/v1/search/find 列表召回（兼容性最好）；context=/api/v1/search/search mode=context 服务端组装（若托管服务不支持会自动回退到 find）。"
+  },
+  "recall_limit": {
+    "description": "最多召回条数",
+    "type": "int",
+    "default": 8,
+    "hint": "范围 1-30，语义召回命中的最多条数。"
+  },
+  "recall_min_score": {
+    "description": "召回最低相关分",
+    "type": "float",
+    "default": 0.35,
+    "hint": "范围 0-1，低于此分的命中会被过滤。"
+  },
+  "recall_token_budget": {
+    "description": "注入上下文 token 预算",
+    "type": "int",
+    "default": 2000,
+    "hint": "范围 200-8000，自动注入时给记忆块分配的最大 token 数（context 模式下透传 max_tokens）。"
+  },
+  "recall_target_uri": {
+    "description": "召回范围限定（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "留空按当前 Agent 的默认作用域召回；可填如 viking://user/xxx/memories 收窄范围。"
+  },
+  "commit_message_threshold": {
+    "description": "消息数提交阈值",
+    "type": "int",
+    "default": 20,
+    "hint": "同一会话累积 N 条消息后自动 commit，触发长期记忆提取。"
+  },
+  "commit_token_threshold": {
+    "description": "token 提交阈值",
+    "type": "int",
+    "default": 4096,
+    "hint": "同一会话累积 token 估算值超过此值后自动 commit。"
+  },
+  "commit_idle_seconds": {
+    "description": "空闲提交秒数",
+    "type": "int",
+    "default": 1800,
+    "hint": "会话空闲 N 秒后自动 commit 积压消息（后台任务检查）。"
+  },
+  "capture_tool_io": {
+    "description": "记录工具调用到记忆",
+    "type": "bool",
+    "default": false,
+    "hint": "把模型工具调用与结果以结构化 part 写入记忆（需要 AstrBot 支持 on_using_llm_tool 钩子）。"
+  },
+  "request_timeout_seconds": {
+    "description": "请求超时（秒）",
+    "type": "int",
+    "default": 60,
+    "hint": "范围 10-300，OpenViking API 单次请求超时。commit 可能较慢。"
+  },
+  "debug_log": {
+    "description": "调试日志",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后输出每次写入/召回/提交的详细日志。"
+  }
+}
